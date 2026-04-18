@@ -7,7 +7,7 @@ import numpy as np
 
 st.set_page_config(page_title="Finance Dashboard", layout="wide")
 
-# ---------- UI STYLE ----------
+# ---------- UI ----------
 st.markdown("""
 <style>
 body {background-color: #0E1117;}
@@ -16,12 +16,6 @@ body {background-color: #0E1117;}
     background-color: #1C1F26;
     padding: 15px;
     border-radius: 10px;
-    border: 1px solid #2A2D34;
-}
-.stButton>button {
-    border-radius: 8px;
-    background-color: #4CAF50;
-    color: white;
 }
 section[data-testid="stSidebar"] {
     background-color: #161A23;
@@ -33,6 +27,18 @@ h1, h2, h3 {color: #EAECEF;}
 # ---------- DATABASE ----------
 conn = sqlite3.connect("finance.db", check_same_thread=False)
 
+conn.execute("""
+CREATE TABLE IF NOT EXISTS transactions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    trans_date TEXT,
+    amount REAL,
+    category TEXT,
+    type TEXT,
+    note TEXT
+)
+""")
+conn.commit()
+
 # ---------- CACHE ----------
 @st.cache_data
 def load_file(file):
@@ -42,20 +48,22 @@ def load_file(file):
 
 @st.cache_data
 def load_db():
-    df = pd.read_sql_query("SELECT * FROM transactions", conn)
-    if not df.empty:
-        df["trans_date"] = pd.to_datetime(df["trans_date"])
-    return df
+    try:
+        df = pd.read_sql_query("SELECT * FROM transactions", conn)
+        if not df.empty:
+            df["trans_date"] = pd.to_datetime(df["trans_date"])
+        return df
+    except:
+        return pd.DataFrame()
 
 # ---------- CLEAN ----------
 def clean_data(df):
     df["trans_date"] = pd.to_datetime(df["trans_date"], errors="coerce")
     df["amount"] = pd.to_numeric(df["amount"], errors="coerce")
     df["type"] = df["type"].astype(str).str.strip().str.capitalize()
-    df = df.dropna(subset=["trans_date", "amount"])
-    return df
+    return df.dropna(subset=["trans_date", "amount"])
 
-# ---------- PREDICTION ----------
+# ---------- ML ----------
 def predict_spending(df):
     exp = df[df["type"] == "Expense"].copy()
     if len(exp) < 5:
@@ -74,7 +82,6 @@ def predict_spending(df):
 
     return pd.DataFrame({"date": future_dates, "predicted": preds})
 
-# ---------- ANOMALY ----------
 def detect_anomalies(df):
     exp = df[df["type"] == "Expense"].copy()
     if exp.empty:
@@ -88,15 +95,13 @@ def detect_anomalies(df):
 
 # ---------- SIDEBAR ----------
 st.sidebar.title("Finance App")
-st.sidebar.caption("Smart financial tracking")
 page = st.sidebar.radio("Navigation", ["Dashboard", "Add Transaction", "Settings"])
 
 # =========================
 # DASHBOARD
 # =========================
 if page == "Dashboard":
-    st.markdown("## Finance Dashboard")
-    st.caption("Track. Analyze. Improve your financial decisions.")
+    st.title("Finance Dashboard")
 
     uploaded_file = st.file_uploader("Upload Excel/CSV", type=["xlsx", "csv"])
 
@@ -109,13 +114,9 @@ if page == "Dashboard":
         df = load_db()
 
     if df is not None and not df.empty:
-
         df = clean_data(df)
 
         # FILTERS
-        st.sidebar.divider()
-        st.sidebar.subheader("Filters")
-
         start, end = st.sidebar.date_input(
             "Date Range",
             [df["trans_date"].min(), df["trans_date"].max()]
@@ -134,56 +135,43 @@ if page == "Dashboard":
         expense = df[df["type"] == "Expense"]["amount"].sum()
         balance = income - expense
 
-        col1, col2, col3, col4 = st.columns(4)
+        col1, col2, col3 = st.columns(3)
         col1.metric("Income", f"₹{income:,.0f}")
         col2.metric("Expense", f"₹{expense:,.0f}")
         col3.metric("Balance", f"₹{balance:,.0f}")
 
-        if income > 0:
-            savings = ((income - expense) / income) * 100
-            col4.metric("Savings Rate", f"{savings:.1f}%")
-
         # TABS
         tab1, tab2, tab3, tab4 = st.tabs(
-            ["Overview", "Trends", "AI Insights", "Data"]
+            ["Overview", "Prediction", "Anomalies", "Data"]
         )
 
         # OVERVIEW
         with tab1:
-            st.markdown("### Financial Overview")
-            c1, c2 = st.columns(2)
+            exp = df[df["type"] == "Expense"]
+            if not exp.empty:
+                cat = exp.groupby("category")["amount"].sum()
+                st.bar_chart(cat)
 
-            with c1:
-                exp = df[df["type"] == "Expense"]
-                if not exp.empty:
-                    cat = exp.groupby("category")["amount"].sum()
-                    st.bar_chart(cat)
+            df["month"] = df["trans_date"].dt.to_period("M")
+            trend = df.groupby("month")["amount"].sum()
+            st.line_chart(trend)
 
-            with c2:
-                df["month"] = df["trans_date"].dt.to_period("M")
-                trend = df.groupby("month")["amount"].sum()
-                st.line_chart(trend)
-
-        # TRENDS + PREDICTION
+        # PREDICTION
         with tab2:
-            st.markdown("### Future Spending Prediction")
             pred = predict_spending(df)
-
             if pred is not None:
                 st.line_chart(pred.set_index("date"))
             else:
                 st.info("Not enough data")
 
-        # AI INSIGHTS
+        # ANOMALY
         with tab3:
-            st.markdown("### Anomaly Detection")
             anomalies = detect_anomalies(df)
-
             if anomalies is not None and not anomalies.empty:
-                st.warning(f"{len(anomalies)} unusual transactions found")
+                st.warning(f"{len(anomalies)} anomalies found")
                 st.dataframe(anomalies[["trans_date", "amount", "category"]])
             else:
-                st.success("No anomalies detected")
+                st.success("No anomalies")
 
         # DATA
         with tab4:
@@ -216,7 +204,7 @@ elif page == "Add Transaction":
                 (str(d), amt, cat, t, note)
             )
             conn.commit()
-            st.success("Transaction added")
+            st.success("Added")
 
 # =========================
 # SETTINGS
@@ -230,3 +218,5 @@ elif page == "Settings":
         st.success("Database cleared")
 
 conn.close()
+
+
