@@ -53,4 +53,5 @@ python -m streamlit run app.py
 
 ## Author
 
-Your Name
+Tista Kapoor
+
